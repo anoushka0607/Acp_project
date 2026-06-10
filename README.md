@@ -13,4 +13,4 @@
 C
 
 ## Source Code
-See `prompt.txt`
+See `code.c`
