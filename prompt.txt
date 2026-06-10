@@ -1,0 +1,518 @@
+================================================================
+  2D ASCII GRAPHICS EDITOR — Full C Source Code
+  File: graphics_editor.c
+  Compile: gcc graphics_editor.c -o graphics_editor
+  Run:     ./graphics_editor
+================================================================
+
+/* ============================================================
+   graphics_editor.c
+   2D Graphics Editor using * and _ characters
+   - Shapes: Circle, Rectangle, Line, Triangle
+   - Add, Delete, Modify objects
+   - 2D array canvas (ROWS x COLS chars)
+   - Text menu interface (no external dependencies)
+   ============================================================ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+/* ── Canvas dimensions ── */
+#define ROWS 30
+#define COLS 80
+#define MAX_OBJECTS 64
+
+/* ── Shape type IDs ── */
+#define SHAPE_CIRCLE   1
+#define SHAPE_RECT     2
+#define SHAPE_LINE     3
+#define SHAPE_TRIANGLE 4
+
+/* ── Drawing characters ── */
+#define CHAR_STAR '_'   /* default fill char, change to '*' if preferred */
+
+/* ============================================================
+   Data structures
+   ============================================================ */
+
+typedef struct {
+    int type;        /* SHAPE_* constant */
+    char ch;         /* drawing character: '*' or '_' */
+    int active;      /* 1 = exists, 0 = deleted slot */
+
+    /* Circle */
+    int cx, cy, r;
+
+    /* Rectangle */
+    int rx, ry, rw, rh;
+
+    /* Line */
+    int x1, y1, x2, y2;
+
+    /* Triangle */
+    int tx, ty, base, height;
+} Shape;
+
+/* Global state */
+char canvas[ROWS][COLS];
+Shape objects[MAX_OBJECTS];
+int obj_count = 0;
+
+/* ============================================================
+   Canvas helpers
+   ============================================================ */
+
+void canvas_clear(void) {
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            canvas[r][c] = ' ';
+}
+
+void canvas_set(int r, int c, char ch) {
+    if (r >= 0 && r < ROWS && c >= 0 && c < COLS)
+        canvas[r][c] = ch;
+}
+
+/* ============================================================
+   Drawing functions
+   ============================================================ */
+
+/* Draw circle using parametric equations.
+   x is scaled by 2 to compensate for monospace font aspect ratio. */
+void draw_circle(int cx, int cy, int r, char ch) {
+    double step = 0.5;   /* degrees; smaller = denser outline */
+    for (double deg = 0.0; deg < 360.0; deg += step) {
+        double rad = deg * 3.14159265 / 180.0;
+        int x = (int)round(cx + r * cos(rad) * 2.0);
+        int y = (int)round(cy + r * sin(rad) * 0.5);
+        canvas_set(y, x, ch);
+    }
+}
+
+/* Draw rectangle outline. */
+void draw_rect(int x, int y, int w, int h, char ch) {
+    /* Top and bottom edges */
+    for (int c = x; c <= x + w; c++) {
+        canvas_set(y,     c, ch);
+        canvas_set(y + h, c, ch);
+    }
+    /* Left and right edges */
+    for (int r = y; r <= y + h; r++) {
+        canvas_set(r, x,     ch);
+        canvas_set(r, x + w, ch);
+    }
+}
+
+/* Draw line using Bresenham's algorithm. */
+void draw_line(int x1, int y1, int x2, int y2, char ch) {
+    int dx = abs(x2 - x1);
+    int dy = abs(y2 - y1);
+    int sx = (x1 < x2) ? 1 : -1;
+    int sy = (y1 < y2) ? 1 : -1;
+    int err = dx - dy;
+
+    int x = x1, y = y1;
+    while (1) {
+        canvas_set(y, x, ch);
+        if (x == x2 && y == y2) break;
+        int e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x += sx; }
+        if (e2 <  dx) { err += dx; y += sy; }
+    }
+}
+
+/* Draw triangle outline.
+   (tx, ty) = top-left anchor; apex is centered above base.
+   Expands one character per row on each side. */
+void draw_triangle(int tx, int ty, int base, int height, char ch) {
+    int mid = base / 2;
+    /* Draw apex */
+    canvas_set(ty, tx + mid, ch);
+    /* Draw expanding sides row by row */
+    for (int row = 1; row < height - 1; row++) {
+        int left  = tx + mid - row;
+        int right = tx + mid + row;
+        canvas_set(ty + row, left,  ch);
+        canvas_set(ty + row, right, ch);
+    }
+    /* Draw filled base */
+    int left  = tx + mid - (height - 1);
+    int right = tx + mid + (height - 1);
+    for (int c = left; c <= right; c++)
+        canvas_set(ty + height - 1, c, ch);
+}
+
+/* ============================================================
+   Object management
+   ============================================================ */
+
+void redraw_all(void) {
+    canvas_clear();
+    for (int i = 0; i < obj_count; i++) {
+        if (!objects[i].active) continue;
+        Shape *s = &objects[i];
+        switch (s->type) {
+            case SHAPE_CIRCLE:
+                draw_circle(s->cx, s->cy, s->r, s->ch);
+                break;
+            case SHAPE_RECT:
+                draw_rect(s->rx, s->ry, s->rw, s->rh, s->ch);
+                break;
+            case SHAPE_LINE:
+                draw_line(s->x1, s->y1, s->x2, s->y2, s->ch);
+                break;
+            case SHAPE_TRIANGLE:
+                draw_triangle(s->tx, s->ty, s->base, s->height, s->ch);
+                break;
+        }
+    }
+}
+
+int add_object(Shape s) {
+    if (obj_count >= MAX_OBJECTS) {
+        printf("  [!] Object limit reached (%d).\n", MAX_OBJECTS);
+        return -1;
+    }
+    s.active = 1;
+    objects[obj_count++] = s;
+    redraw_all();
+    return obj_count - 1;
+}
+
+int delete_object(int idx) {
+    if (idx < 0 || idx >= obj_count || !objects[idx].active) {
+        printf("  [!] Invalid object index.\n");
+        return 0;
+    }
+    objects[idx].active = 0;
+    redraw_all();
+    return 1;
+}
+
+/* ============================================================
+   Display
+   ============================================================ */
+
+void display_canvas(void) {
+    /* Top border */
+    printf("  +");
+    for (int c = 0; c < COLS; c++) printf("-");
+    printf("+\n");
+
+    for (int r = 0; r < ROWS; r++) {
+        printf("  |");
+        for (int c = 0; c < COLS; c++)
+            putchar(canvas[r][c]);
+        printf("|\n");
+    }
+
+    /* Bottom border */
+    printf("  +");
+    for (int c = 0; c < COLS; c++) printf("-");
+    printf("+\n");
+}
+
+void list_objects(void) {
+    int any = 0;
+    printf("\n  ── Active objects ──\n");
+    for (int i = 0; i < obj_count; i++) {
+        if (!objects[i].active) continue;
+        any = 1;
+        Shape *s = &objects[i];
+        printf("  [%d] ", i);
+        switch (s->type) {
+            case SHAPE_CIRCLE:
+                printf("Circle   ch='%c'  cx=%d cy=%d r=%d\n",
+                       s->ch, s->cx, s->cy, s->r);
+                break;
+            case SHAPE_RECT:
+                printf("Rect     ch='%c'  x=%d y=%d w=%d h=%d\n",
+                       s->ch, s->rx, s->ry, s->rw, s->rh);
+                break;
+            case SHAPE_LINE:
+                printf("Line     ch='%c'  (%d,%d)->(%d,%d)\n",
+                       s->ch, s->x1, s->y1, s->x2, s->y2);
+                break;
+            case SHAPE_TRIANGLE:
+                printf("Triangle ch='%c'  x=%d y=%d base=%d h=%d\n",
+                       s->ch, s->tx, s->ty, s->base, s->height);
+                break;
+        }
+    }
+    if (!any) printf("  (none)\n");
+    printf("\n");
+}
+
+/* ============================================================
+   Input helpers
+   ============================================================ */
+
+char read_char_choice(void) {
+    char ch;
+    printf("  Draw char (* or _): ");
+    scanf(" %c", &ch);
+    if (ch != '*' && ch != '_') ch = '*';
+    return ch;
+}
+
+int read_int(const char *prompt, int min, int max) {
+    int v;
+    while (1) {
+        printf("  %s [%d-%d]: ", prompt, min, max);
+        if (scanf("%d", &v) == 1 && v >= min && v <= max)
+            return v;
+        printf("  [!] Enter a number between %d and %d.\n", min, max);
+        while (getchar() != '\n'); /* flush */
+    }
+}
+
+/* ============================================================
+   Menu actions
+   ============================================================ */
+
+void menu_add_circle(void) {
+    printf("\n  -- Add Circle --\n");
+    Shape s = {0}; s.type = SHAPE_CIRCLE;
+    s.ch     = read_char_choice();
+    s.cx     = read_int("Center X", 0, COLS - 1);
+    s.cy     = read_int("Center Y", 0, ROWS - 1);
+    s.r      = read_int("Radius",   1, 15);
+    int idx  = add_object(s);
+    if (idx >= 0) printf("  [+] Circle added as object %d.\n", idx);
+}
+
+void menu_add_rect(void) {
+    printf("\n  -- Add Rectangle --\n");
+    Shape s = {0}; s.type = SHAPE_RECT;
+    s.ch  = read_char_choice();
+    s.rx  = read_int("X (left)",  0, COLS - 2);
+    s.ry  = read_int("Y (top)",   0, ROWS - 2);
+    s.rw  = read_int("Width",     1, COLS - 1);
+    s.rh  = read_int("Height",    1, ROWS - 1);
+    int idx = add_object(s);
+    if (idx >= 0) printf("  [+] Rectangle added as object %d.\n", idx);
+}
+
+void menu_add_line(void) {
+    printf("\n  -- Add Line --\n");
+    Shape s = {0}; s.type = SHAPE_LINE;
+    s.ch = read_char_choice();
+    s.x1 = read_int("X1", 0, COLS - 1);
+    s.y1 = read_int("Y1", 0, ROWS - 1);
+    s.x2 = read_int("X2", 0, COLS - 1);
+    s.y2 = read_int("Y2", 0, ROWS - 1);
+    int idx = add_object(s);
+    if (idx >= 0) printf("  [+] Line added as object %d.\n", idx);
+}
+
+void menu_add_triangle(void) {
+    printf("\n  -- Add Triangle --\n");
+    Shape s = {0}; s.type = SHAPE_TRIANGLE;
+    s.ch     = read_char_choice();
+    s.tx     = read_int("X (anchor)", 0, COLS - 1);
+    s.ty     = read_int("Y (top)",    0, ROWS - 1);
+    s.base   = read_int("Base width", 1, 30);
+    s.height = read_int("Height",     1, ROWS - 1);
+    int idx  = add_object(s);
+    if (idx >= 0) printf("  [+] Triangle added as object %d.\n", idx);
+}
+
+void menu_delete(void) {
+    list_objects();
+    int idx = read_int("Object index to delete", 0, obj_count - 1);
+    if (delete_object(idx))
+        printf("  [-] Object %d deleted.\n", idx);
+}
+
+void menu_modify(void) {
+    list_objects();
+    int idx = read_int("Object index to modify", 0, obj_count - 1);
+    if (idx < 0 || idx >= obj_count || !objects[idx].active) {
+        printf("  [!] Invalid index.\n"); return;
+    }
+
+    Shape *s = &objects[idx];
+    printf("  Modifying object %d (%s). Re-enter all fields:\n", idx,
+           s->type == SHAPE_CIRCLE   ? "Circle"   :
+           s->type == SHAPE_RECT     ? "Rectangle":
+           s->type == SHAPE_LINE     ? "Line"     : "Triangle");
+
+    s->ch = read_char_choice();
+
+    switch (s->type) {
+        case SHAPE_CIRCLE:
+            s->cx = read_int("Center X", 0, COLS - 1);
+            s->cy = read_int("Center Y", 0, ROWS - 1);
+            s->r  = read_int("Radius",   1, 15);
+            break;
+        case SHAPE_RECT:
+            s->rx = read_int("X (left)",  0, COLS - 2);
+            s->ry = read_int("Y (top)",   0, ROWS - 2);
+            s->rw = read_int("Width",     1, COLS - 1);
+            s->rh = read_int("Height",    1, ROWS - 1);
+            break;
+        case SHAPE_LINE:
+            s->x1 = read_int("X1", 0, COLS - 1);
+            s->y1 = read_int("Y1", 0, ROWS - 1);
+            s->x2 = read_int("X2", 0, COLS - 1);
+            s->y2 = read_int("Y2", 0, ROWS - 1);
+            break;
+        case SHAPE_TRIANGLE:
+            s->tx     = read_int("X (anchor)", 0, COLS - 1);
+            s->ty     = read_int("Y (top)",    0, ROWS - 1);
+            s->base   = read_int("Base width", 1, 30);
+            s->height = read_int("Height",     1, ROWS - 1);
+            break;
+    }
+    redraw_all();
+    printf("  [*] Object %d updated.\n", idx);
+}
+
+void menu_export(void) {
+    const char *fname = "output.txt";
+    FILE *f = fopen(fname, "w");
+    if (!f) { printf("  [!] Cannot open %s for writing.\n", fname); return; }
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++)
+            fputc(canvas[r][c], f);
+        fputc('\n', f);
+    }
+    fclose(f);
+    printf("  [>] Canvas saved to '%s'.\n", fname);
+}
+
+/* ============================================================
+   Main menu loop
+   ============================================================ */
+
+void print_menu(void) {
+    printf("\n  ╔══════════════════════════════╗\n");
+    printf("  ║   ASCII 2D GRAPHICS EDITOR   ║\n");
+    printf("  ╠══════════════════════════════╣\n");
+    printf("  ║  1. Add Circle               ║\n");
+    printf("  ║  2. Add Rectangle            ║\n");
+    printf("  ║  3. Add Line                 ║\n");
+    printf("  ║  4. Add Triangle             ║\n");
+    printf("  ║  5. Delete Object            ║\n");
+    printf("  ║  6. Modify Object            ║\n");
+    printf("  ║  7. List Objects             ║\n");
+    printf("  ║  8. Display Canvas           ║\n");
+    printf("  ║  9. Export to output.txt     ║\n");
+    printf("  ║  0. Quit                     ║\n");
+    printf("  ╚══════════════════════════════╝\n");
+    printf("  Choice: ");
+}
+
+int main(void) {
+    canvas_clear();
+    int choice;
+
+    printf("\n  Welcome to the ASCII 2D Graphics Editor!\n");
+    printf("  Canvas: %d rows x %d cols | Characters: * and _\n\n", ROWS, COLS);
+
+    while (1) {
+        print_menu();
+        if (scanf("%d", &choice) != 1) { while (getchar() != '\n'); continue; }
+
+        switch (choice) {
+            case 1: menu_add_circle();   break;
+            case 2: menu_add_rect();     break;
+            case 3: menu_add_line();     break;
+            case 4: menu_add_triangle(); break;
+            case 5:
+                if (obj_count == 0) { printf("  [!] No objects to delete.\n"); break; }
+                menu_delete(); break;
+            case 6:
+                if (obj_count == 0) { printf("  [!] No objects to modify.\n"); break; }
+                menu_modify(); break;
+            case 7: list_objects();      break;
+            case 8: display_canvas();    break;
+            case 9: menu_export();       break;
+            case 0:
+                printf("  Goodbye!\n\n");
+                return 0;
+            default:
+                printf("  [!] Invalid choice. Enter 0-9.\n");
+        }
+    }
+}
+
+================================================================
+  HOW TO COMPILE AND RUN
+================================================================
+
+  Step 1 – Save the C code (everything between the #include lines
+           and the closing brace of main) into a file named:
+               graphics_editor.c
+
+  Step 2 – Compile (Linux / macOS / WSL):
+               gcc graphics_editor.c -o graphics_editor -lm
+
+           On Windows with MinGW:
+               gcc graphics_editor.c -o graphics_editor.exe -lm
+
+  Step 3 – Run:
+               ./graphics_editor          (Linux/macOS)
+               graphics_editor.exe        (Windows)
+
+================================================================
+  FUNCTION REFERENCE
+================================================================
+
+  canvas_clear()
+      Fills the entire ROWS×COLS grid with spaces.
+
+  canvas_set(r, c, ch)
+      Safely writes character ch to grid[r][c],
+      bounds-checked so no buffer overflows occur.
+
+  draw_circle(cx, cy, r, ch)
+      Parametric circle. X is scaled ×2 to compensate
+      for the 2:1 width:height ratio of monospace glyphs.
+      Step size 0.5° gives a dense, smooth outline.
+
+  draw_rect(x, y, w, h, ch)
+      Draws all four edges of a rectangle outline.
+
+  draw_line(x1, y1, x2, y2, ch)
+      Bresenham's line algorithm — integer-only, no FP needed.
+      Works for any slope including diagonals and steep lines.
+
+  draw_triangle(tx, ty, base, height, ch)
+      Apex at (tx + base/2, ty), sides expand one col per row,
+      base row is fully filled.
+
+  add_object(s)
+      Appends a Shape to the objects[] array and calls
+      redraw_all() to rebuild the canvas. Returns index.
+
+  delete_object(idx)
+      Sets objects[idx].active = 0 and redraws.
+
+  redraw_all()
+      Clears canvas then replays every active object in order,
+      so later objects paint over earlier ones naturally.
+
+  display_canvas()
+      Prints the full canvas with a border frame to stdout.
+
+  menu_export()
+      Writes the current canvas to "output.txt" in the
+      current working directory.
+
+================================================================
+  NOTES
+================================================================
+
+  • Canvas size: change ROWS and COLS at the top of the file.
+  • Max objects: change MAX_OBJECTS (default 64).
+  • The -lm flag links libm for cos()/sin() used by draw_circle.
+  • No external libraries needed — pure C99 standard library only.
+  • For a richer TUI (colors, arrow-key menus), link ncurses:
+        gcc graphics_editor.c -o graphics_editor -lm -lncurses
+    Then replace printf/scanf sections with ncurses calls such as
+    initscr(), mvprintw(), getch(), and endwin().
+
+================================================================
